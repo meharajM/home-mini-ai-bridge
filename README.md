@@ -1,8 +1,10 @@
 # Home Mini AI Bridge
 
-Software-only voice AI bridge for a stock Google Home Mini. First proof of concept accepts recognized text over HTTP, calls an OpenAI-compatible chat endpoint, synthesizes speech with Piper, and can cast that audio to a Google Cast speaker.
+Software-only voice AI bridge for a stock Google Home Mini. The bridge accepts typed or externally recognized text over HTTP, calls an OpenAI-compatible chat endpoint, synthesizes speech with Piper, and can cast that audio to a Google Cast speaker.
 
-**This does not receive microphone audio from the Mini.** In this mode, Google handles speech recognition; the project handles the model and speech output. A short Cast test was heard on the Mini. No settings, volume, hardware, or firmware were changed; the old Android device has not been accessed.
+**This does not receive microphone audio from the Mini.** No transcript connector is included; the caller supplies recognized text. A future Mini-to-Keep relay would still use Google speech recognition. A short Cast test was heard on the Mini. No settings, volume, hardware, or firmware were changed; the old Android device has not been accessed.
+
+**Release status:** the transcript-to-audio LAN path has durable replay protection and bounded turn processing. Full voice production readiness remains gated on a personal-account transcript source, model quality/latency, supervised model-generated Mini playback, and host deployment/recovery. See [deployment and operations](./docs/deployment.md) and [acceptance gates](./docs/production-readiness-plan.md). No service is installed automatically.
 
 ## First proof of concept
 
@@ -17,11 +19,12 @@ Cast is disabled by default. Tests use fake model, TTS, and Cast services, so th
 Requirements: Node.js 22 or newer, Python 3.10 or newer with the pinned PyChromecast dependency for playback, a running OpenAI-compatible chat server, and a running Piper HTTP server. Piper uses a separate virtual environment so its dependencies stay isolated from PyChromecast.
 
 ```sh
-npm install
-npm run check
-npm test
+npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+npm run check
+npm test
+.venv/bin/python -m unittest discover -s python -v
 cp .env.example .env
 ```
 
@@ -56,7 +59,7 @@ curl -sS http://127.0.0.1:8787/v1/turn \
 
 The response contains a temporary WAV URL. Fetch it on the host to verify the generated WAV; links expire after ten minutes. This loopback test does not contact any Cast device. The small `gemma3:1b` model produced an unsupported privacy claim during testing, so review responses and choose a more reliable model before enabling playback. The Mini smoke test remains a separate optional step in [docs/testing.md](./docs/testing.md).
 
-To enable Cast later, set `HOST=0.0.0.0`, a randomly generated `TURN_API_TOKEN` (see `.env.example`), `CAST_ENABLED=true`, `CAST_DEVICE_IP`, and `PUBLIC_BASE_URL` to an address reachable from the speaker. `.env.example` points `PYCHROMECAST_PYTHON` at the repo-local virtual environment. This exposes the POC API to the LAN; keep it on a trusted network. The bridge has been exercised on the host with local Ollama and Piper while Cast stayed disabled. A separate fixed-response WAV was previously heard on the Mini.
+To enable Cast later, set `HOST` to the computer's LAN IP, a randomly generated `TURN_API_TOKEN` (see `.env.example`), `CAST_ENABLED=true`, `CAST_DEVICE_IP`, and `PUBLIC_BASE_URL` to an address reachable from the speaker. `.env.example` points `PYCHROMECAST_PYTHON` at the repo-local virtual environment. Restrict inbound access to the Mini and trusted clients. Follow [deployment and operations](./docs/deployment.md) before enabling LAN use. The bridge has been exercised on the host with local Ollama and Piper while Cast stayed disabled. A separate fixed-response WAV was previously heard on the Mini.
 
 ## Turn safety and restart behavior
 
@@ -80,3 +83,5 @@ LAN binding remains opt-in through `HOST`. Non-loopback binding requires a beare
 
 See [PLAN.md](./PLAN.md) for research findings, project stages, and decision gates.
 See [docs/testing.md](./docs/testing.md) for simulator and safe Mini playback procedures.
+
+CI runs Node syntax/tests and Python compile/fake-receiver tests on every push and pull request, without speaker access. Successful CI verifies software behavior, not real-device audio or transcript-source compatibility.

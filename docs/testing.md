@@ -16,6 +16,7 @@ From the repository root:
 ```sh
 npm run check
 npm test
+.venv/bin/python -m unittest discover -s python -v
 ```
 
 The end-to-end test uses local fake model and Piper endpoints. The Cast adapter test substitutes a fake child process, so these tests never scan the network or contact any Cast receiver.
@@ -66,18 +67,24 @@ This test sends one manually typed transcript. The Mini supplies no microphone a
 
 1. First run the model and Piper locally and test the transcript endpoint while `CAST_ENABLED=false`. Fetch the returned WAV URL on the computer and confirm it plays.
 2. Find the Mini's current IP in the Google Home app or router. Keep the computer and Mini on the same Wi-Fi; Google's Cast guidance requires the sender and receiver to share a Wi-Fi network.
-3. Set `HOST` to the computer's LAN IP, `TURN_API_TOKEN` to a temporary secret, `CAST_ENABLED=true`, and `CAST_DEVICE_IP` to the Mini's IP. Set `PUBLIC_BASE_URL` to `http://<computer-lan-ip>:8787` so the Mini can fetch the WAV. Keep the network port private to the LAN; do not create a router port-forward.
+3. Set `HOST` to the computer's LAN IP, `TURN_API_TOKEN` to a generated random secret of at least 32 characters and 8 distinct characters with no whitespace, `CAST_ENABLED=true`, and `CAST_DEVICE_IP` to the Mini's IP. Set `PUBLIC_BASE_URL` to `http://<computer-lan-ip>:8787` so the Mini can fetch the WAV. Keep the network port private to the LAN; do not create a router port-forward.
 4. Restart the bridge and submit one short transcript with the bearer token:
 
 ```sh
 curl -sS "http://<computer-lan-ip>:8787/v1/turn" \
   -H "authorization: Bearer $TURN_API_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"eventId":"mini-smoke-1","transcript":"Say hello in one short sentence."}'
+  -d '{"eventId":"mini-smoke-unique-1","transcript":"Say hello in one short sentence."}'
 ```
 
-5. Listen for the response, then stop the bridge and turn `CAST_ENABLED` back off. If another Cast app is active, the helper launches the Default Media Receiver first. It then waits for the receiver to report the exact WAV URL as `PLAYING`; a Cast session being active alone does not count as success. That status still cannot prove sound reached the room, so confirm by listening.
+5. Listen for the response and wait for the HTTP result before stopping the bridge and turning `CAST_ENABLED` back off. The call can take model cold-load time plus synthesis and playback time. Use a fresh event ID only for a deliberate new test; a previously accepted ID is suppressed even after restart. If another Cast app is active, the helper launches the Default Media Receiver first. It then waits for the receiver to report the exact WAV URL as `PLAYING`; a Cast session being active alone does not count as success. It then waits for that same URL to become `IDLE` with reason `FINISHED`; only then does the turn succeed and the queue advance. Receiver status cannot prove sound reached the room, so confirm by listening. If playback fails, is replaced, or times out, pause intake and check the Mini is idle before restarting the bridge; the current process blocks further playback.
 
 This starts a normal temporary Cast playback session; it does not reset, reconfigure, or install anything on the Mini. It can interrupt whatever audio is currently playing, so only run it when that is okay. The current Cast helper does not change the speaker volume.
 
 Google's troubleshooting guidance recommends the same Wi-Fi and notes that client/AP isolation or blocked multicast can prevent discovery. This bridge connects to a configured IP directly, but the Cast control port and the HTTP audio URL still need to be reachable from the speaker.
+
+## 5. Supervised cold-start and recovery acceptance
+
+These are pending real-device checks, not part of CI. After host-only quality checks, start dependencies and bridge from a cold host start with the Mini idle. Send exactly one short reviewed prompt with a fresh event ID and listen for the model-generated Piper reply. Record cold/warm latency and model/voice versions. Pause intake and let playback finish before stopping anything.
+
+For a recovery check, restart the bridge while the Mini is idle using the same `DATA_DIR`. Resubmit the completed event unchanged: expect `already_handled` and no audio. Then send one deliberate new event and listen once. A host-only interrupted-turn test with Cast disabled can verify suppression before trying recovery near the real speaker. Do not deliberately crash the bridge during real Mini playback. Return `CAST_ENABLED=false` after supervised testing. See [operations](./deployment.md#start-stop-and-recover) for handling failures and stale audio URLs.
