@@ -1,0 +1,8 @@
+.env
+.piper/
+node_modules/
+.venv/
+.venv-piper/
+coverage/
+*.wav
+__pycache__/
