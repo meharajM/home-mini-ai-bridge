@@ -1,5 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { RequestError } from "./errors.js";
 
 const BODY_LIMIT = 16 * 1024;
 const TRANSCRIPT_LIMIT = 2000;
@@ -18,13 +19,13 @@ async function readJson(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > BODY_LIMIT) throw Object.assign(new Error("Request body too large"), { status: 413 });
+    if (size > BODY_LIMIT) throw new RequestError(413, "Request body too large");
     chunks.push(chunk);
   }
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    throw Object.assign(new Error("Request body must be valid JSON"), { status: 400 });
+    throw new RequestError(400, "Request body must be valid JSON");
   }
 }
 
@@ -34,12 +35,15 @@ function sendJson(response, status, body) {
 }
 
 export function createServer({ config, pipeline, audioStore }) {
-  if (config.host !== "127.0.0.1" && config.host !== "localhost" && config.host !== "::1" && !config.turnApiToken) {
-    throw new Error("TURN_API_TOKEN is required when HOST is exposed beyond loopback");
+  if (config.host !== "127.0.0.1" && config.host !== "localhost" && config.host !== "::1" && (typeof config.turnApiToken !== "string" || config.turnApiToken.length < 32
+      || /\s/.test(config.turnApiToken) || new Set(config.turnApiToken).size < 8)) {
+    throw new Error("A strong TURN_API_TOKEN (32+ characters, 8+ distinct, no whitespace) is required when HOST is exposed beyond loopback");
   }
 
   return createHttpServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    let url;
+    try { url = new URL(request.url ?? "/", "http://localhost"); }
+    catch { return sendJson(response, 400, { error: "Invalid request URL" }); }
 
     if (request.method === "GET" && url.pathname === "/health") {
       return sendJson(response, 200, { status: "ok" });
@@ -66,8 +70,11 @@ export function createServer({ config, pipeline, audioStore }) {
     }
 
     try {
+      if (!/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] ?? "")) {
+        throw new RequestError(415, "Content-Type must be application/json");
+      }
       const input = await readJson(request);
-      if (!input || typeof input.eventId !== "string" || input.eventId.length < 1 || input.eventId.length > 200) {
+      if (!input || Array.isArray(input) || typeof input !== "object" || typeof input.eventId !== "string" || !input.eventId.trim() || input.eventId.length > 200) {
         return sendJson(response, 400, { error: "eventId must be a string of 1–200 characters" });
       }
       if (typeof input.transcript !== "string" || !input.transcript.trim() || input.transcript.length > TRANSCRIPT_LIMIT) {
@@ -79,7 +86,11 @@ export function createServer({ config, pipeline, audioStore }) {
       });
       return sendJson(response, 200, result);
     } catch (error) {
-      return sendJson(response, error.status ?? 502, { error: error.message ?? "Turn failed" });
+      if (error instanceof RequestError) {
+        if (error.status === 429) response.setHeader("retry-after", "1");
+        return sendJson(response, error.status, { error: error.message });
+      }
+      return sendJson(response, 502, { error: "Turn failed" });
     }
   });
 }

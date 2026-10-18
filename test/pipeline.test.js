@@ -55,3 +55,71 @@ test("casting stays disabled by default", async () => {
   assert.equal(result.playback, "disabled");
   assert.equal(playCalls, 0);
 });
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function options(overrides = {}) {
+  return {
+    respond: async (text) => text,
+    synthesize: async () => Buffer.from("RIFF-test-audio"),
+    audioStore: createAudioStore({ baseUrl: "http://127.0.0.1" }),
+    ...overrides,
+  };
+}
+
+test("FIFO queue waits for playback, coalesces duplicates, and rejects overload without reserving it", async () => {
+  const playing = deferred();
+  const started = deferred();
+  const order = [];
+  const pipeline = createPipeline(options({
+    maxWaiting: 1,
+    castEnabled: true,
+    respond: async (text) => { order.push(text); return text; },
+    playAudio: async () => { started.resolve(); await playing.promise; },
+  }));
+  const first = pipeline.processTurn({ eventId: "one", transcript: "first" });
+  await started.promise;
+  const second = pipeline.processTurn({ eventId: "two", transcript: "second" });
+  const duplicate = pipeline.processTurn({ eventId: "two", transcript: "second" });
+  await assert.rejects(pipeline.processTurn({ eventId: "two", transcript: "changed" }), { status: 409 });
+  await assert.rejects(pipeline.processTurn({ eventId: "three", transcript: "third" }), { status: 429 });
+  assert.deepEqual(order, ["first"]);
+  playing.resolve();
+  await first;
+  assert.deepEqual(await second, await duplicate);
+  await pipeline.processTurn({ eventId: "three", transcript: "third" });
+  assert.deepEqual(order, ["first", "second", "third"]);
+});
+
+test("Cast failure blocks queued and future work without another playback", async () => {
+  const playing = deferred();
+  let playCalls = 0;
+  const pipeline = createPipeline(options({
+    castEnabled: true,
+    playAudio: async () => { playCalls += 1; await playing.promise; throw new Error("secret device detail"); },
+  }));
+  const first = pipeline.processTurn({ eventId: "one", transcript: "first" });
+  const second = pipeline.processTurn({ eventId: "two", transcript: "second" });
+  const rejected = Promise.all([
+    assert.rejects(first, { status: 503 }),
+    assert.rejects(second, { status: 503 }),
+  ]);
+  playing.resolve();
+  await rejected;
+  await assert.rejects(pipeline.processTurn({ eventId: "three", transcript: "third" }), { status: 503 });
+  assert.equal(playCalls, 1);
+});
+
+test("failed provider attempt is handled once and does not stall later turns", async () => {
+  const pipeline = createPipeline(options({ respond: async (text) => {
+    if (text === "fail") throw new Error("upstream failed");
+    return text;
+  } }));
+  await assert.rejects(pipeline.processTurn({ eventId: "fail", transcript: "fail" }));
+  assert.equal((await pipeline.processTurn({ eventId: "fail", transcript: "fail" })).status, "already_handled");
+  assert.equal((await pipeline.processTurn({ eventId: "ok", transcript: "ok" })).playback, "disabled");
+});

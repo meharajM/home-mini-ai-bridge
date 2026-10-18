@@ -62,6 +62,26 @@ def wait_until_playing(media, expected_url: str, listener: PlaybackListener, tim
         time.sleep(min(0.25, remaining))
 
 
+def wait_until_finished(media, expected_url: str, listener: PlaybackListener, timeout: float = 120) -> None:
+    """Do not release the next turn until this exact URL finishes."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if listener.load_error is not None:
+            raise RuntimeError("Cast receiver rejected media")
+        media.update_status()
+        status = media.status
+        if status.content_id != expected_url:
+            raise RuntimeError("Cast playback was replaced before completion")
+        if status.player_state == "IDLE":
+            if status.idle_reason == "FINISHED":
+                return
+            raise RuntimeError("Cast playback ended without confirmed completion")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Cast receiver never confirmed playback completion")
+        time.sleep(min(0.25, remaining))
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print("Usage: cast_audio.py DEVICE_IP AUDIO_URL", file=sys.stderr)
@@ -92,6 +112,7 @@ def main() -> int:
         media.register_status_listener(listener)
         media.play_media(audio_url, "audio/wav")
         wait_until_playing(media, audio_url, listener)
+        wait_until_finished(media, audio_url, listener)
         return 0
     except Exception as error:  # The CLI reports a concise error to its caller.
         print(f"Cast playback failed: {type(error).__name__}", file=sys.stderr)

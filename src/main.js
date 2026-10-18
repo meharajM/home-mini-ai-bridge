@@ -1,3 +1,4 @@
+import { createEventStore } from "./event-store.js";
 import { createAudioStore } from "./audio-store.js";
 import { createCastPlayer } from "./cast.js";
 import { createPipeline } from "./pipeline.js";
@@ -25,6 +26,8 @@ const pipeline = createPipeline({
   }),
   synthesize: createPiperSynthesizer({ url: env.PIPER_URL, voice: env.PIPER_VOICE }),
   audioStore,
+  eventStore: createEventStore({ dataDir: env.DATA_DIR ?? ".data" }),
+  maxWaiting: Number(env.MAX_WAITING_TURNS ?? 8),
   castEnabled,
   playAudio: castEnabled ? createCastPlayer({
     ip: env.CAST_DEVICE_IP,

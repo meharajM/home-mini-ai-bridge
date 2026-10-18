@@ -6,3 +6,5 @@ node_modules/
 coverage/
 *.wav
 __pycache__/
+
+.data/

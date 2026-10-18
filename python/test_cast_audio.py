@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from python.cast_audio import PlaybackListener, ensure_default_media_receiver, wait_until_playing
+from python.cast_audio import PlaybackListener, ensure_default_media_receiver, wait_until_playing, wait_until_finished
 
 
 class FakeMedia:
@@ -62,6 +62,43 @@ class CastPlaybackWaitTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "error 104"):
             wait_until_playing(media, "http://mini/audio.wav", listener, timeout=0.1)
+
+
+class CastPlaybackCompletionTests(unittest.TestCase):
+    def test_requires_exact_url_to_finish(self):
+        media = FakeMedia(SimpleNamespace(content_id="http://mini/audio.wav", player_state="IDLE", idle_reason="FINISHED"))
+        wait_until_finished(media, "http://mini/audio.wav", PlaybackListener(), timeout=0.01)
+        self.assertEqual(media.update_count, 1)
+
+    def test_waits_through_playing_before_finish(self):
+        media = FakeMedia(SimpleNamespace(content_id="http://mini/audio.wav", player_state="PLAYING", idle_reason=None))
+        def update():
+            media.update_count += 1
+            if media.update_count == 2:
+                media.status.player_state = "IDLE"
+                media.status.idle_reason = "FINISHED"
+        media.update_status = update
+        wait_until_finished(media, "http://mini/audio.wav", PlaybackListener(), timeout=0.3)
+        self.assertEqual(media.update_count, 2)
+
+    def test_timeout_or_interruption_is_not_completion(self):
+        for content_id, state, reason in [
+            ("http://other/audio.wav", "IDLE", "FINISHED"),
+            ("http://mini/audio.wav", "IDLE", "ERROR"),
+            ("http://mini/audio.wav", "IDLE", "CANCELLED"),
+            ("http://mini/audio.wav", "PLAYING", None),
+        ]:
+            with self.subTest(state=state, reason=reason):
+                media = FakeMedia(SimpleNamespace(content_id=content_id, player_state=state, idle_reason=reason))
+                with self.assertRaises((RuntimeError, TimeoutError)):
+                    wait_until_finished(media, "http://mini/audio.wav", PlaybackListener(), timeout=0.01)
+
+    def test_load_error_is_not_completion(self):
+        listener = PlaybackListener()
+        listener.load_media_failed(0, 104)
+        media = FakeMedia(SimpleNamespace(content_id="http://mini/audio.wav", player_state="IDLE", idle_reason="FINISHED"))
+        with self.assertRaises(RuntimeError):
+            wait_until_finished(media, "http://mini/audio.wav", listener)
 
 
 if __name__ == "__main__":

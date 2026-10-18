@@ -9,7 +9,7 @@ export function createCastPlayer({
   pythonCommand = "python3",
   scriptPath = DEFAULT_SCRIPT,
   spawnProcess = spawn,
-  timeoutMs = 40_000,
+  timeoutMs = 150_000,
 }) {
   if (!ip || !isIP(ip)) throw new Error("CAST_DEVICE_IP must be an IP address when casting is enabled");
 
